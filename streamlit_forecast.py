@@ -149,7 +149,7 @@ if current_data:
     with col_stats:
         st.subheader("Current Status")
         
-        # --- LOGIC FOR WEATHER CONDITION EMOJI ---
+        # weather condition emoticonsss
         condition_map = {
             "Clear": "☀️",
             "Clouds": "☁️",
@@ -211,7 +211,7 @@ with st.expander("Complete Heat Index Classification & Health Effects"):
     The Heat Index, also known as the **'Apparent Temperature'**, is what the temperature feels like to the human body when relative humidity is combined with the air temperature.
     """)
 
-    # Create the DataFrame for the Table
+  
     hi_data = {
         "Classification": ["Caution", "Extreme Caution", "Danger", "Extreme Danger"],
         "Heat Index Range": ["27°C - 32°C", "33°C - 41°C", "42°C - 51°C", "52°C and above"],
@@ -226,7 +226,7 @@ with st.expander("Complete Heat Index Classification & Health Effects"):
     # Style the table
     st.table(df_hi)
 
-    # Visual Heat Map Chart using Plotly
+    # Visual HEAT chart 
     fig_ref = go.Figure(data=[go.Bar(
         x=["Caution", "Extreme Caution", "Danger", "Extreme Danger"],
         y=[32, 41, 51, 60], # Upper bounds for visualization
@@ -246,7 +246,7 @@ with st.expander("Complete Heat Index Classification & Health Effects"):
     )
     st.plotly_chart(fig_ref, use_container_width=True)   
 
-# FOOTER
+# FOOTER / end credits?
 st.markdown("<br><hr>", unsafe_allow_html=True)
 st.markdown(
     """
