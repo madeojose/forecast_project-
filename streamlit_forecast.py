@@ -4,12 +4,26 @@ import requests
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 
-# 1. Page Configuration
-st.set_page_config(page_title="WeatherForecast 5-Day", layout="wide")
+# Page Configuration
+st.set_page_config(page_title="PH Weather Dashboard", layout="wide")
+
+# --- DATA: REGIONS AND CITIES ---
+
+REGION_MAP = {
+    "NCR": ["Manila", "Quezon City", "Caloocan", "Las Piñas", "Makati", "Malabon", "Mandaluyong", 
+            "Marikina", "Muntinlupa", "Navotas", "Parañaque", "Pasay", "Pasig", "San Juan", 
+            "Taguig", "Valenzuela"],
+    "Luzon": ["Baguio", "Laoag", "Vigan", "Dagupan", "San Fernando", "Tuguegarao", "Santiago", 
+              "Angeles", "Olongapo", "Tarlac City", "Batangas City", "Lipa", "Lucena", 
+              "Puerto Princesa", "Legazpi", "Naga"],
+    "Visayas": ["Iloilo City", "Bacolod", "Cebu City", "Lapu-Lapu", "Mandaue", "Dumaguete", 
+                "Tacloban", "Ormoc"],
+    "Mindanao": ["Zamboanga City", "Cagayan de Oro", "Davao City", "General Santos", "Butuan", 
+                 "Cotabato City", "Surigao City", "Tagum", "Koronadal", "Malaybalay"]
+}
 
 # HEAT INDEX CALCULATION
 def calculate_heat_index(T, RH):
-    """Calculation of heat index"""
     if T < 27: return T 
     hi = -8.78469475556 + 1.61139411 * T + 2.33854883889 * RH + \
          -0.14611605 * T * RH - 0.012308094 * T**2 - 0.0164248277778 * RH**2 + \
@@ -17,57 +31,35 @@ def calculate_heat_index(T, RH):
     return round(hi, 1)
 
 # DATAS API
-def get_weather_data(city):
+def get_weather_data(city_query):
     API_KEY = "323bc084ef2de6a3749a37d1bb16cfae" 
-    curr_url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
-    fore_url = f"https://api.openweathermap.org/data/2.5/forecast?q={city}&appid={API_KEY}&units=metric"
+    curr_url = f"https://api.openweathermap.org/data/2.5/weather?q={city_query},PH&appid={API_KEY}&units=metric"
+    fore_url = f"https://api.openweathermap.org/data/2.5/forecast?q={city_query},PH&appid={API_KEY}&units=metric"
     
     try:
         curr_res = requests.get(curr_url, timeout=10)
         fore_res = requests.get(fore_url, timeout=10)
-        
-        if curr_res.status_code != 200 or fore_res.status_code != 200:
-            return [], [], None
+        if curr_res.status_code != 200: return [], [], None
 
         curr_data = curr_res.json()
         fore_data = fore_res.json()
-
-        days_label = []
-        temps = []
+        days_label = [pd.to_datetime(fore_data['list'][i]['dt_txt']).strftime('%a (%d %b)') for i in range(0, 40, 8)]
+        temps = [fore_data['list'][i]['main']['temp'] for i in range(0, 40, 8)]
         
-        for i in range(0, 40, 8):
-            item = fore_data['list'][i]
-            date_obj = pd.to_datetime(item['dt_txt'])
-            days_label.append(date_obj.strftime('%a (%d %b)')) 
-            temps.append(item['main']['temp'])
-        
-        # ADDED: main condition and icon code
         current = {
+            "name": curr_data['name'],
             "temp": curr_data['main']['temp'],
             "humidity": curr_data['main']['humidity'],
-            "feels_like": curr_data['main']['feels_like'],
-            "pressure": curr_data['main']['pressure'],
             "main_cond": curr_data['weather'][0]['main'],
-            "description": curr_data['weather'][0]['description'].title(),
-            "icon": curr_data['weather'][0]['icon']
+            "description": curr_data['weather'][0]['description'].title()
         }
         return days_label, temps, current
-    except Exception as e:
-        st.error(f"Error: {e}")
-        return [], [], {}
+    except: return [], [], None
 
-# MAP DATAA
 @st.cache_data(ttl=600)
 def get_ph_map_data():
     API_KEY = "323bc084ef2de6a3749a37d1bb16cfae"
-    ph_cities = ["Manila", "Quezon City", "Caloocan", "Las Piñas", "Makati", "Malabon", "Mandaluyong", 
-    "Marikina", "Muntinlupa", "Navotas", "Parañaque", "Pasay", "Pasig", "San Juan", 
-    "Taguig", "Valenzuela", "Baguio", "Laoag", "Vigan", "Dagupan", "San Fernando", 
-    "Tuguegarao", "Santiago", "Angeles", "Olongapo", "Tarlac City", "Batangas City", 
-    "Lipa", "Lucena", "Puerto Princesa", "Legazpi", "Naga", "Iloilo City", "Bacolod", 
-    "Cebu City", "Lapu-Lapu", "Mandaue", "Dumaguete", "Tacloban", "Ormoc", 
-    "Zamboanga City", "Cagayan de Oro", "Davao City", "General Santos", "Butuan", 
-    "Cotabato City", "Surigao City", "Tagum", "Koronadal", "Malaybalay"]
+    all_cities = [city for sublist in REGION_MAP.values() for city in sublist]
     
     def fetch_city(c):
         url = f"https://api.openweathermap.org/data/2.5/weather?q={c},PH&appid={API_KEY}&units=metric"
@@ -77,79 +69,83 @@ def get_ph_map_data():
         except: return None
 
     with ThreadPoolExecutor(max_workers=15) as executor:
-        results = list(executor.map(fetch_city, ph_cities))
-    
+        results = list(executor.map(fetch_city, all_cities))
     return pd.DataFrame([r for r in results if r])
 
-# MAIN UI
-st.title("Weather Dashboard")
+# --- MAIN UI ---
+st.title("Philippine Weather Dashboard")
 
-# Map Section
+# --- SIDEBAR: REGIONAL SELECTION ---
+st.sidebar.header("Geography Filter")
+selected_region = st.sidebar.selectbox("Select Region", list(REGION_MAP.keys()))
+
+# Cities under regions
+city_options = REGION_MAP[selected_region]
+
+#Selection bar
+selected_city = st.sidebar.selectbox(f"Select City in {selected_region}", city_options)
+
+#For manual searching of cities
+manual_search = st.sidebar.text_input(" Manual Search ", placeholder="Type any PH city...")
+
+final_city = manual_search if manual_search else selected_city
+
+# --- SIDEBAR: RELIABLE SOURCES ---
+st.sidebar.divider()
+st.sidebar.subheader("WEATHER SOURCES/REFERENCES")
+st.sidebar.markdown("""
+Learn more about PH weather from official sources:
+
+*  [PAGASA Official](https://www.pagasa.dost.gov.ph/)
+*  [Project NOAH](https://noah.up.edu.ph/)
+*  [PANaHON (PAGASA)](https://www.panahon.gov.ph/)
+*  [OpenWeatherMap](https://openweathermap.org/)
+*  [Windy.com (PH)](https://www.windy.com/)
+*  [NOAA Heat Index Scale](https://www.wpc.ncep.noaa.gov/html/heatindex_equation.shtml)
+""")
+
+# --- MAP SECTION ---
 df_map = get_ph_map_data()
+selected_city_data = df_map[df_map['city'].str.lower() == final_city.lower()]
+
+if not selected_city_data.empty:
+    t_lat, t_lon, t_zoom = selected_city_data.iloc[0]['lat'], selected_city_data.iloc[0]['lon'], 12
+else:
+    t_lat, t_lon, t_zoom = 12.8797, 121.7740, 4.5
+
 if not df_map.empty:
     fig_map = go.Figure(go.Scattermapbox(
-        lat=df_map['lat'], lon=df_map['lon'],
-        mode='markers+text',
-        marker=go.scattermapbox.Marker(size=15, color=df_map['temp'], colorscale='YlOrRd', showscale=True),
-        text=[f"{c}: {t}°C" for c, t in zip(df_map['city'], df_map['temp'])],
-        textposition="top right",
-        textfont=dict(family="Arial Black", size=11, color="white")
+        lat=df_map['lat'], lon=df_map['lon'], mode='markers+text',
+        marker=go.scattermapbox.Marker(size=12, color=df_map['temp'], colorscale='YlOrRd', showscale=True),
+        text=[f"{c}: {t}°C" for c, t in zip(df_map['city'], df_map['temp'])]
     ))
     fig_map.update_layout(
-        mapbox_style="carto-positron",
-        mapbox=dict(center=dict(lat=12.8797, lon=121.7740), zoom=4.5),
-        height=500, margin={"r":0,"t":0,"l":0,"b":0}, template="plotly_white"
+        mapbox_style="carto-positron", mapbox=dict(center=dict(lat=t_lat, lon=t_lon), zoom=t_zoom),
+        height=400, margin={"r":0,"t":0,"l":0,"b":0}
     )
     st.plotly_chart(fig_map, use_container_width=True)
 
-st.divider()
-
-# Sidebar
-ph_list = ["Manila", "Quezon City", "Caloocan", "Las Piñas", "Makati", "Malabon", "Mandaluyong", 
-    "Marikina", "Muntinlupa", "Navotas", "Parañaque", "Pasay", "Pasig", "San Juan", 
-    "Taguig", "Valenzuela", "Baguio", "Laoag", "Vigan", "Dagupan", "San Fernando", 
-    "Tuguegarao", "Santiago", "Angeles", "Olongapo", "Tarlac City", "Batangas City", 
-    "Lipa", "Lucena", "Puerto Princesa", "Legazpi", "Naga", "Iloilo City", "Bacolod", 
-    "Cebu City", "Lapu-Lapu", "Mandaue", "Dumaguete", "Tacloban", "Ormoc", 
-    "Zamboanga City", "Cagayan de Oro", "Davao City", "General Santos", "Butuan", 
-    "Cotabato City", "Surigao City", "Tagum", "Koronadal", "Malaybalay"]
-
-city = st.sidebar.selectbox("Select Location", ph_list)
-
-days, temps, current_data = get_weather_data(city)
+# --- WEATHER DISPLAY ---
+days, temps, current_data = get_weather_data(final_city)
 
 if current_data:
+    st.divider()
     col_graph, col_stats = st.columns([2, 1])
     
     with col_graph:
-        st.subheader(f"5-Day Forecast: Temperature and Heat Index ({city})")
-        forecast_heat_indices = [calculate_heat_index(t, current_data['humidity']) for t in temps]
+        st.subheader(f"5-Day Forecast: {current_data['name']}, PH ({selected_region})")
+        heat_indices = [calculate_heat_index(t, current_data['humidity']) for t in temps]
         
-        fig_curr = go.Figure()
-        fig_curr.add_trace(go.Scatter(
-            x=days, y=temps, mode='lines+markers', name='Air Temperature',
-            line=dict(color='#00CC96', width=3, shape='spline'),
-            hovertemplate='%{y}°C'
-        ))
-        fig_curr.add_trace(go.Scatter(
-            x=days, y=forecast_heat_indices, mode='lines+markers', name='Heat Index (Real Feel)',
-            line=dict(color='#EF553B', width=3, dash='dash', shape='spline'),
-            hovertemplate='%{y}°C'
-        ))
-
-        fig_curr.update_layout(
-            xaxis=dict(showgrid=False), 
-            yaxis=dict(title="Temperature (°C)", showgrid=True),
-            height=400, margin=dict(l=20, r=20, t=40, b=20), 
-            template="plotly_white",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-        )
-        st.plotly_chart(fig_curr, use_container_width=True)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=days, y=temps, name='Temp (°C)', line=dict(color='#00CC96', width=3)))
+        fig.add_trace(go.Scatter(x=days, y=heat_indices, name='Heat Index', line=dict(color='#EF553B', dash='dash')))
+        fig.update_layout(template="plotly_white", height=400)
+        st.plotly_chart(fig, use_container_width=True)
 
     with col_stats:
         st.subheader("Current Status")
         
-        # weather condition emoticonsss
+        # Weather condition emoji
         condition_map = {
             "Clear": "☀️",
             "Clouds": "☁️",
@@ -163,7 +159,7 @@ if current_data:
         }
         emoji = condition_map.get(current_data['main_cond'], "🌍")
         
-        # Displaying the "Partly Sunny/Cloudy" status elegantly
+        # Temperatuyre status display
         st.markdown(f"### {emoji} {current_data['description']}")
         
         heat_idx = calculate_heat_index(current_data['temp'], current_data['humidity'])
@@ -223,7 +219,7 @@ with st.expander("Complete Heat Index Classification & Health Effects"):
         ]
     }
     df_hi = pd.DataFrame(hi_data)
-    # Style the table
+    # Table
     st.table(df_hi)
 
     # Visual HEAT chart 
@@ -244,9 +240,9 @@ with st.expander("Complete Heat Index Classification & Health Effects"):
         margin=dict(l=20, r=20, t=40, b=20),
         template="plotly_white"
     )
-    st.plotly_chart(fig_ref, use_container_width=True)   
+    st.plotly_chart(fig_ref, use_container_width=True)      
 
-# FOOTER / end credits?
+# FOOTER
 st.markdown("<br><hr>", unsafe_allow_html=True)
 st.markdown(
     """
@@ -256,7 +252,7 @@ st.markdown(
             Asna, Madeo Jose  &nbsp;|&nbsp; Brioso, Andrei &nbsp;|&nbsp; 
             Sorongon, Leonard &nbsp;|&nbsp; Bajado, Ronron &nbsp;|&nbsp;
             Pasuquin, Jullian &nbsp;|&nbsp; Sanchez, Althea &nbsp;|&nbsp;
-            Vergara, Hannah Leigh &nbsp;|&nbsp;
+            Vergara, Hanna Leigh
         </p>
         <p style="font-size: 0.8em;"> 2026 WeatherForecast</p>
     </div>
