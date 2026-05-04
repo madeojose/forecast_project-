@@ -3,6 +3,7 @@ import plotly.graph_objects as go
 import requests
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
+import datetime
 
 # Page Configuration
 st.set_page_config(page_title="PH Weather Dashboard", layout="wide")
@@ -10,12 +11,14 @@ st.set_page_config(page_title="PH Weather Dashboard", layout="wide")
 # --- DATA: REGIONS AND CITIES ---
 
 REGION_MAP = {
-    "NCR": ["Manila", "Quezon City", "Caloocan", "Las Piñas", "Makati", "Malabon", "Mandaluyong", 
-            "Marikina", "Muntinlupa", "Navotas", "Parañaque", "Pasay", "Pasig", "San Juan", 
-            "Taguig", "Valenzuela"],
-    "Luzon": ["Baguio", "Laoag", "Vigan", "Dagupan", "San Fernando", "Tuguegarao", "Santiago", 
-              "Angeles", "Olongapo", "Tarlac City", "Batangas City", "Lipa", "Lucena", 
-              "Puerto Princesa", "Legazpi", "Naga"],
+    "Luzon": [
+        "Manila", "Quezon City", "Caloocan", "Las Piñas", "Makati", "Malabon", 
+        "Mandaluyong", "Marikina", "Muntinlupa", "Navotas", "Parañaque", 
+        "Pasay", "Pasig", "San Juan", "Taguig", "Valenzuela",
+        "Baguio", "Laoag", "Vigan", "Dagupan", "San Fernando", "Tuguegarao", 
+        "Santiago", "Angeles", "Olongapo", "Tarlac City", "Batangas City", 
+        "Lipa", "Lucena", "Puerto Princesa", "Legazpi", "Naga"
+    ],
     "Visayas": ["Iloilo City", "Bacolod", "Cebu City", "Lapu-Lapu", "Mandaue", "Dumaguete", 
                 "Tacloban", "Ormoc"],
     "Mindanao": ["Zamboanga City", "Cagayan de Oro", "Davao City", "General Santos", "Butuan", 
@@ -43,18 +46,41 @@ def get_weather_data(city_query):
 
         curr_data = curr_res.json()
         fore_data = fore_res.json()
-        days_label = [pd.to_datetime(fore_data['list'][i]['dt_txt']).strftime('%a (%d %b)') for i in range(0, 40, 8)]
+        
+        # OpenWeather 5-Day Forecast (sampled every 24 hours)
+        days_label = [pd.to_datetime(fore_data['list'][i]['dt_txt']).strftime('%d %b') for i in range(0, 40, 8)]
         temps = [fore_data['list'][i]['main']['temp'] for i in range(0, 40, 8)]
+        humids = [fore_data['list'][i]['main']['humidity'] for i in range(0, 40, 8)]
         
         current = {
             "name": curr_data['name'],
             "temp": curr_data['main']['temp'],
             "humidity": curr_data['main']['humidity'],
             "main_cond": curr_data['weather'][0]['main'],
-            "description": curr_data['weather'][0]['description'].title()
+            "description": curr_data['weather'][0]['description'].title(),
+            "lat": curr_data['coord']['lat'],
+            "lon": curr_data['coord']['lon']
         }
-        return days_label, temps, current
-    except: return [], [], None
+        return days_label, temps, humids, current
+    except: return [], [], [], None
+
+# HISTORICAL DATA (Last 10 Days)
+@st.cache_data(ttl=3600)
+def get_historical_comparison(lat, lon):
+    end_date = datetime.date.today() - datetime.timedelta(days=1)
+    start_date = end_date - datetime.timedelta(days=9)
+    url = f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={start_date}&end_date={end_date}&hourly=temperature_2m,relative_humidity_2m&timezone=Asia%2FSingapore"
+    
+    try:
+        res = requests.get(url, timeout=10).json()
+        hist_temps = res['hourly']['temperature_2m'][12::24]
+        hist_rh = res['hourly']['relative_humidity_2m'][12::24]
+        hist_times = res['hourly']['time'][12::24]
+        hist_days = [pd.to_datetime(t).strftime('%d %b') for t in hist_times]
+        hist_hi = [calculate_heat_index(t, rh) for t, rh in zip(hist_temps, hist_rh)]
+        return hist_days, hist_temps, hist_hi
+    except:
+        return [], [], []
 
 @st.cache_data(ttl=600)
 def get_ph_map_data():
@@ -78,30 +104,21 @@ st.title("Philippine Weather Dashboard")
 # --- SIDEBAR: REGIONAL SELECTION ---
 st.sidebar.header("Geography Filter")
 selected_region = st.sidebar.selectbox("Select Region", list(REGION_MAP.keys()))
-
-# Cities under regions
 city_options = REGION_MAP[selected_region]
-
-#Selection bar
 selected_city = st.sidebar.selectbox(f"Select City in {selected_region}", city_options)
-
-#For manual searching of cities
 manual_search = st.sidebar.text_input(" Manual Search ", placeholder="Type any PH city...")
-
 final_city = manual_search if manual_search else selected_city
 
-# --- SIDEBAR: RELIABLE SOURCES ---
+# SIDEBAR SOURCES
 st.sidebar.divider()
 st.sidebar.subheader("WEATHER SOURCES/REFERENCES")
 st.sidebar.markdown("""
 Learn more about PH weather from official sources:
-
-*  [PAGASA Official](https://www.pagasa.dost.gov.ph/)
-*  [Project NOAH](https://noah.up.edu.ph/)
-*  [PANaHON (PAGASA)](https://www.panahon.gov.ph/)
-*  [OpenWeatherMap](https://openweathermap.org/)
-*  [Windy.com (PH)](https://www.windy.com/)
-*  [NOAA Heat Index Scale](https://www.wpc.ncep.noaa.gov/html/heatindex_equation.shtml)
+* [PAGASA Official](https://www.pagasa.dost.gov.ph/)
+* [Project NOAH](https://noah.up.edu.ph/)
+* [PANaHON (PAGASA)](https://www.panahon.gov.ph/)
+* [OpenWeatherMap](https://openweathermap.org/)
+* [Windy.com (PH)](https://www.windy.com/)
 """)
 
 # --- MAP SECTION ---
@@ -126,78 +143,82 @@ if not df_map.empty:
     st.plotly_chart(fig_map, use_container_width=True)
 
 # --- WEATHER DISPLAY ---
-days, temps, current_data = get_weather_data(final_city)
+f_days, f_temps, f_humids, current_data = get_weather_data(final_city) # type: ignore
 
 if current_data:
     st.divider()
     col_graph, col_stats = st.columns([2, 1])
     
     with col_graph:
-        st.subheader(f"5-Day Forecast: {current_data['name']}, PH ({selected_region})")
-        heat_indices = [calculate_heat_index(t, current_data['humidity']) for t in temps]
+        st.subheader(f" Weather Forecast Timeline: {current_data['name']}")
         
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=days, y=temps, name='Temp (°C)', line=dict(color='#00CC96', width=3)))
-        fig.add_trace(go.Scatter(x=days, y=heat_indices, name='Heat Index', line=dict(color='#EF553B', dash='dash')))
-        fig.update_layout(template="plotly_white", height=400)
-        st.plotly_chart(fig, use_container_width=True)
+        # historical comparison 
+        h_days, h_temps, h_hi = get_historical_comparison(current_data['lat'], current_data['lon'])
+        
+        # Forecast Heat Index calculation
+        f_hi = [calculate_heat_index(t, h) for t, h in zip(f_temps, f_humids)] # type: ignore
+        
+        # COMBINE DATA
+        all_days = h_days + f_days
+        all_temps = h_temps + f_temps
+        all_hi = h_hi + f_hi
+        
+        if all_days:
+            fig_comb = go.Figure()
+            
+            fig_comb.add_trace(go.Scatter(
+                x=all_days, y=all_temps, 
+                name='Air Temperature (°C)', 
+                line=dict(color='#00CC96', width=4),
+                mode='lines+markers'
+            ))
+            
+            fig_comb.add_trace(go.Scatter(
+                x=all_days, y=all_hi, 
+                name='Heat Index (Real Feel)', 
+                line=dict(color='#EF553B', width=2, dash='dash'),
+                mode='lines+markers'
+            ))
+
+            fig_comb.add_vline(x=len(h_days)-0.5, line_width=2, line_dash="dot", line_color="grey")
+            fig_comb.add_annotation(x=len(h_days)-0.5, y=max(all_hi), text="FORECAST START", showarrow=False, textangle=-90, xshift=15)
+
+            fig_comb.update_layout(
+                template="plotly_white", 
+                height=500, 
+                hovermode="x unified",
+                xaxis_title="Date Timeline (Past 10 Days -> Next 5 Days)",
+                yaxis_title="Temperature (°C)",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig_comb, use_container_width=True)
+        else:
+            st.info("Unified timeline unavailable.")
 
     with col_stats:
         st.subheader("Current Status")
-        
-        # Weather condition emoji
-        condition_map = {
-            "Clear": "☀️",
-            "Clouds": "☁️",
-            "Rain": "🌧️",
-            "Drizzle": "🌦️",
-            "Thunderstorm": "⛈️",
-            "Snow": "❄️",
-            "Mist": "🌫️",
-            "Fog": "🌫️",
-            "Haze": "🌫️"
-        }
+        condition_map = {"Clear": "☀️", "Clouds": "☁️", "Rain": "🌧️", "Drizzle": "🌦️", "Thunderstorm": "⛈️", "Snow": "❄️", "Mist": "🌫️", "Fog": "🌫️", "Haze": "🌫️"}
         emoji = condition_map.get(current_data['main_cond'], "🌍")
-        
-        # Temperatuyre status display
         st.markdown(f"### {emoji} {current_data['description']}")
         
         heat_idx = calculate_heat_index(current_data['temp'], current_data['humidity'])
-        
         st.metric(label="Temperature", value=f"{current_data['temp']}°C")
         st.metric(label="Heat Index (Real Feel)", value=f"{heat_idx}°C")
         st.metric(label="Humidity", value=f"{current_data['humidity']}%")
         
-        diff = temps[-1] - temps[0]
+        diff = f_temps[-1] - f_temps[0]
         if diff < 0:
             st.info(f"Cooler weather expected by end of week ({abs(round(diff, 1))}°C drop).")
         else:
             st.warning(f"Warmer weather expected by end of week ({round(diff, 1)}°C rise).")
-            
-       
-#  HEAT ADVISORY & PRECAUTIONS
+
         st.divider()
         st.subheader("Health Advisory")
-
-        if heat_idx < 27:
-            st.success("**Comfortable:** No heat-related precautions needed.")
-        elif 27 <= heat_idx < 32:
-            st.info("**Caution:** Fatigue is possible with prolonged exposure and activity.")
-            st.markdown("- Stay hydrated\n- Take breaks in the shade")
-        elif 32 <= heat_idx < 41:
-            st.warning("**Extreme Caution:** Heat cramps and exhaustion are possible.")
-            st.markdown("- Drink plenty of water\n- Limit heavy outdoor activity")
-        elif 41 <= heat_idx < 54:
-            st.error("**DANGER:** Heat exhaustion likely; heat stroke possible.")
-            st.markdown("""
-            **Precautions:**
-            * Avoid direct sunlight.
-            * Wear lightweight, light-colored clothing.
-            * Reduce physical exertion to a minimum.
-            """)
-        else:
-            st.error("**EXTREME DANGER:** Heat stroke is imminent.")
-            st.markdown("⚠️ **Stay indoors in an air-conditioned room. Seek medical help immediately if feeling dizzy or nauseous.**")
+        if heat_idx < 27: st.success("**Comfortable:** No precautions needed.")
+        elif 27 <= heat_idx < 32: st.info("**Caution:** Fatigue possible.")
+        elif 32 <= heat_idx < 41: st.warning("**Extreme Caution:** Heat cramps possible.")
+        elif 41 <= heat_idx < 54: st.error("**DANGER:** Heat exhaustion likely.")
+        else: st.error("**EXTREME DANGER:** Heat stroke imminent.")
 
 # --- HEAT INDEX REFERENCE CHART SECTION ---
 st.divider()
@@ -240,7 +261,7 @@ with st.expander("Complete Heat Index Classification & Health Effects"):
         margin=dict(l=20, r=20, t=40, b=20),
         template="plotly_white"
     )
-    st.plotly_chart(fig_ref, use_container_width=True)      
+    st.plotly_chart(fig_ref, use_container_width=True) 
 
 # FOOTER
 st.markdown("<br><hr>", unsafe_allow_html=True)
