@@ -4,9 +4,10 @@ import requests
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 import datetime
+import time  
 
 # Page Configuration
-st.set_page_config(page_title="PH Weather Dashboard", layout="wide")
+st.set_page_config(page_title="ClimateWatch", layout="wide")
 
 # --- DATA: REGIONS AND CITIES ---
 
@@ -64,20 +65,26 @@ def get_weather_data(city_query):
         return days_label, temps, humids, current
     except: return [], [], [], None
 
-# HISTORICAL DATA (Last 10 Days)
+# HISTORICAL DATA (Last 7 Days)
 @st.cache_data(ttl=3600)
 def get_historical_comparison(lat, lon):
+    # End date is yesterday
     end_date = datetime.date.today() - datetime.timedelta(days=1)
-    start_date = end_date - datetime.timedelta(days=9)
+    # Start date is 6 days before the end_date to get a total of 7 days
+    start_date = end_date - datetime.timedelta(days=6) 
+    
     url = f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={start_date}&end_date={end_date}&hourly=temperature_2m,relative_humidity_2m&timezone=Asia%2FSingapore"
     
     try:
         res = requests.get(url, timeout=10).json()
+        # Slicing [12::24] picks the noon (12:00 PM) data point for each day
         hist_temps = res['hourly']['temperature_2m'][12::24]
         hist_rh = res['hourly']['relative_humidity_2m'][12::24]
         hist_times = res['hourly']['time'][12::24]
+        
         hist_days = [pd.to_datetime(t).strftime('%d %b') for t in hist_times]
         hist_hi = [calculate_heat_index(t, rh) for t, rh in zip(hist_temps, hist_rh)]
+        
         return hist_days, hist_temps, hist_hi
     except:
         return [], [], []
@@ -98,12 +105,19 @@ def get_ph_map_data():
         results = list(executor.map(fetch_city, all_cities))
     return pd.DataFrame([r for r in results if r])
 
+# 
+@st.fragment(run_every="1s")
+def display_live_time():
+    now = datetime.datetime.now()
+    st.markdown(f" Date: {now.strftime('%A, %d %B %Y')}")
+    st.markdown(f" Time: {now.strftime('%I:%M:%S %p')}")
+
 # --- MAIN UI ---
 st.title("Philippine Weather Dashboard")
 
 # --- SIDEBAR: REGIONAL SELECTION ---
 st.sidebar.header("Geography Filter")
-selected_region = st.sidebar.selectbox("Select Region", list(REGION_MAP.keys()))
+selected_region = st.sidebar.selectbox("", list(REGION_MAP.keys()))
 city_options = REGION_MAP[selected_region]
 selected_city = st.sidebar.selectbox(f"Select City in {selected_region}", city_options)
 manual_search = st.sidebar.text_input(" Manual Search ", placeholder="Type any PH city...")
@@ -187,7 +201,7 @@ if current_data:
                 template="plotly_white", 
                 height=500, 
                 hovermode="x unified",
-                xaxis_title="Date Timeline (Past 10 Days -> Next 5 Days)",
+                xaxis_title="Date Timeline (Past 7 days -> Next 5 Days)",
                 yaxis_title="Temperature (°C)",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
@@ -196,6 +210,9 @@ if current_data:
             st.info("Unified timeline unavailable.")
 
     with col_stats:
+        # LIVE TIME DISPLAY
+        display_live_time()
+        
         st.subheader("Current Status")
         condition_map = {"Clear": "☀️", "Clouds": "☁️", "Rain": "🌧️", "Drizzle": "🌦️", "Thunderstorm": "⛈️", "Snow": "❄️", "Mist": "🌫️", "Fog": "🌫️", "Haze": "🌫️"}
         emoji = condition_map.get(current_data['main_cond'], "🌍")
@@ -214,11 +231,35 @@ if current_data:
 
         st.divider()
         st.subheader("Health Advisory")
-        if heat_idx < 27: st.success("**Comfortable:** No precautions needed.")
-        elif 27 <= heat_idx < 32: st.info("**Caution:** Fatigue possible.")
-        elif 32 <= heat_idx < 41: st.warning("**Extreme Caution:** Heat cramps possible.")
-        elif 41 <= heat_idx < 54: st.error("**DANGER:** Heat exhaustion likely.")
-        else: st.error("**EXTREME DANGER:** Heat stroke imminent.")
+        
+        if heat_idx < 27:
+            st.success("**Level: Comfortable**")
+            st.markdown("""
+            - Enjoy outdoor activities. ITS THE TEMPERATURE IS SAFE OUTSIDE
+            
+            """)
+        elif 27 <= heat_idx < 32:
+            st.info("**Level: Caution**")
+            st.markdown("""
+            - Drink water regularly; wear lightweight clothing.
+           
+            """)
+        elif 32 <= heat_idx < 41:
+            st.warning("**Level: Extreme Caution**")
+            st.markdown("""
+            - Stay in the shade; use fans/AC; hydrate with electrolytes.
+            
+            """)
+        elif 41 <= heat_idx < 54:
+            st.error("**Level: DANGER**")
+            st.markdown("""
+            Limit all outdoor activities; wear hats/umbrellas; 
+            """)
+        else:
+            st.error("**Level: EXTREME DANGER**")
+            st.markdown("""
+             Stay indoors; apply cold compresses if feeling faint
+            """)
 
 # --- HEAT INDEX REFERENCE CHART SECTION ---
 st.divider()
